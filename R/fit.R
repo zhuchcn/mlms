@@ -30,6 +30,7 @@
 #'   \item{confint}{95\% confidence internal}
 #'   \item{unadjusted}{The coefficients of unadjusted model}
 #'   \item{adjusted}{The coefficients of adjusted model}
+#'   \item{alternative}{The alternative hypothesis}
 #' }
 #'
 #' @examples
@@ -80,7 +81,8 @@ fit_mlms = function(X, design, Z, coef, alternative="two.sided"){
             unadjusted.model = fit1$coefficients,
             adjusted.model   = fit2$coefficients,
             df.residual      = df.residual,
-            confint          = confint
+            confint          = confint,
+            alternative      = alternative
         ),
         class = "mlms"
     )
