@@ -12,4 +12,9 @@ LazyData: true
 RoxygenNote: 7.0.0
 Collate:
     growth.R
+    fit.R
     mlms.R
+Imports:
+    dplyr
+Suggests:
+    openxlsx

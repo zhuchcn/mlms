@@ -1,218 +1,97 @@
-#' @title fit mixed linear model selection
-#' @description This function fits a linear model regression between any
-#' variable in \code{data.frame} X and the design matrix, with the
-#' \code{data.frame} Z as covariates.
-#' @details Each potential covariate in Z is frist tested whether it is
-#' correlated with any variable in X. The result of this step is a \code{matrix}
-#' of p values in the slot \code{bivar}. For any variable in X, only the
-#' covariants in Z with a p-value < 0.1 is used to adjust the variance in the
-#' complete model. Next, the covariants are tested whether they are significant
-#' in the complete model. The result of this step is in the slot \code{covar}.
-#' Finally, the complete model is fit to test the effect of the target
-#' coefficient. The result is in the slot \code{fits}
-#' @param X data.frame
-#' @param design matrix. Output from \code{\link{model.matrix}}. Number of rows
-#' must equal to that of X.
-#' @param Z data.frame. Number of rows must equal to that of X.
-#' @param coef character. The target coefficient to test.
-#' @param alternative character. The length must be either 1 or the same as the
-#' number of columns in X.
+#' @title Summarizing mlms result
+#' @description summary method for class "mlms"
+#' @param x an object of class "mlms", usually, a result of a call to \code{
+#' link{fit_mlms}}
+#' @return
+#' The function summary.mlms returns a list of result organized from a given
+#' mlms object.
+#' \describe{
+#'   \item{bivars}{The p-value matrix for bivariate correlation between any
+#'   variable from \code{X} and \code{Z}.}
+#'   \item{covars}{The p-value matrix for covariates in the complete model.}
+#'   \item{models}{Combinded model coefficients and statistics for both
+#'   unadjusted and adjusted for each x variable}
+#' }
+#' @importFrom magrittr `%>%`
+#' @import dplyr
+#' @export
 #' @examples
 #' data(growth)
 #' X = growth[,1:3]
 #' design = model.matrix(~treatment, data = growth)
 #' Z = growth[,5:10]
-#' fit_mlms(X, design, Z, coef = "treatmentLNS")
-#' @export
-fit_mlms = function(X, design, Z, coef, alternative="two.sided"){
-    stopifnot(nrow(X) == nrow(design))
-    stopifnot(nrow(X) == nrow(Z))
-    stopifnot(is.character(coef))
-    stopifnot(coef %in% colnames(design))
-
-    if(length(alternative) == 1){
-        if(!alternative %in% c("two.sided", "greater", "less")){
-            stop("alternative must be either \"two.sided\", \"less\", or \"greater\"")
-        }
-        alternative = rep(alternative, ncol(X))
-    } else {
-        if(length(alternative) != ncol(X)){
-            stop("The length of alternative must be either 1 or the same as column number in X")
-        }
-        if(any(!alternative %in% c("two.sided", "greater", "less"))){
-            stop("alternative must be either \"two.sided\", \"less\", or \"greater\"")
-        }
-    }
-
-    if(any(!is.numeric(Z))) {
-        Z = make_dummy_variables(Z)
-        cat("Categorical variables are converted to dummy variables\n")
-    }
-
-    bivars = bivar(X, Z)
-    covars = covar(X, design, Z, bivars)
-    fit1 = .fit_unadjusted(X, design, coef, alternative)
-    fit2 = .fit_select_model(X, design, Z, bivars, coef, alternative)
-    df.residual = cbind(unadjusted = fit1$df.residual, adjusted = fit2$df.residual)
-    confint = cbind(fit1$confint, fit2$confint)
-    colnames(confint) = paste (c(rep("unadjusted", 2), rep("adjusted", 2)),
-                               colnames(confint))
-
+#' fit = fit_mlms(X, design, Z, coef = "treatmentLNS")
+#' res = summary(fit)
+summary.mlms = function(x, ...){
+    bivars = x$bivars
+    covars = x$covars
+    unadjusted = cbind(x$unadjusted.model, x$confint[,1:2], df = x$df.residual[,1]) %>%
+        as.data.frame()
+    unadjusted$var = rownames(unadjusted)
+    unadjusted$model = "unadjusted"
+    unadjusted = unadjusted[,c(8,9,1,2,5,6,7,3,4)]
+    colnames(unadjusted) = gsub("unadjusted", "", colnames(unadjusted))
+    adjusted = cbind(x$adjusted.model, x$confint[,3:4], df = x$df.residual[,2]) %>%
+        as.data.frame()
+    adjusted$var = rownames(adjusted)
+    adjusted$model = "adjusted"
+    adjusted = adjusted[,c(8,9,1,2,5,6,7,3,4)]
+    colnames(adjusted) = gsub("adjusted", "", colnames(adjusted))
+    models = rbind(unadjusted, adjusted) %>%
+        mutate(
+            model = factor(model) %>% relevel(ref = "unadjusted"),
+            var = factor(var, levels = unique(var))
+        ) %>%
+        arrange(var, model)
     structure(
         list(
-            bivars           = bivars,
-            covars           = covars,
-            unadjusted.model = fit1$coefficients,
-            adjusted.model   = fit2$coefficients,
-            df.residual      = df.residual,
-            confint          = confint
+            bivars = bivars,
+            covars = covars,
+            models = models
         ),
-        class = "mlms"
+        class = "summary.mlms"
     )
 }
 
-#' @title Calculate bivariate correlation
-#' @description Calculate the p-values of Pearson's correlation between any
-#' combination of variables from data.frame X and Y
-#' @param X data.frame
-#' @param Y data.frame
-bivar = function(X, Y){
-    lapply(X, function(x){
-        sapply(Y, function(y){
-            cor.test(x, y)$p.value
-        })
-    }) %>%
-        do.call(rbind, .)
-}
+#' @export
+export = function(x, ...) UseMethod("export", x)
 
-#' @title Calculate covariants
-#' @description Calculate the p-values of the variable Z as a covariate in the
-#' complete model. Only variables that are significantly correlated with the x
-#' variabel in X is tested.
-#' @param X data.frame
-#' @param design matrix
-#' @param Z data.frame
-#' @param bivars matrix returned by \code{\link{bivar}}
-#' @importFrom magrittr `%>%`
-#' @keywords internal
-covar = function(X, design, Z, bivars) {
-    lapply(colnames(X), function(x_var){
-        x = X[, x_var]
-        d = cbind(design, Z[, bivars[x_var,] < 0.1, drop = FALSE]) %>%
-            as.matrix()
-        fit = lm(x ~ d + 0) %>% summary %>% coef
-        rownames(fit) = gsub("^d", "", rownames(fit))
-        res = sapply(colnames(bivars), function(z){
-            if(z %in% rownames(fit)){
-                return(fit[z, "Pr(>|t|)"])
-            }
-            return(NA)
-        })
-    }) %>%
-        do.call(rbind, .) %>%
-        `rownames<-`(colnames(X))
-}
-
-#' @importFrom magrittr `%>%`
-#' @keywords internal
-.fit_select_model = function(X, design, Z, bivars, coef, alternative){
-    res = lapply(seq_len(ncol(X)), function(i){
-        x_var = colnames(X)[i]
-        x = X[, x_var]
-        d = cbind(design, Z[, bivars[x_var,] < 0.1, drop = FALSE]) %>%
-            as.matrix()
-        mod = lm(x ~ d + 0)
-        ci = confint(mod)[paste0("d", coef),]
-        names(ci) = paste("CI", names(ci))
-        df.residual = mod$df.residual
-        coefficients = summary(mod)$coefficients[paste0("d", coef),]
-        if(alternative[i] != "two.sided"){
-            lower_tail = alternative[i] == "less"
-            coefficients[4] = pt(coefficients[3], df.residual, lower.tail = lower_tail)
-        }
-        return(list(
-            "coefficients" = coefficients,
-            "confint"      = ci,
-            "df.residual"  = df.residual
-        ))
-    })
-    coefficients = lapply(res, function(x) x$coefficients) %>%
-        do.call(rbind, .) %>% `rownames<-`(colnames(X))
-    df.residual = sapply(res, function(x) x$df.residual) %>%
-        `names<-`(colnames(X))
-    confint = lapply(res, function(x) x$confint) %>%
-        do.call(rbind, .) %>% `rownames<-`(colnames(X))
-    return(list(
-        "coefficients" = coefficients,
-        "confint"      = confint,
-        "df.residual"  = df.residual
-    ))
-}
-
-#' @keywords internal
-#' @importFrom magrittr `%>%`
-.fit_unadjusted = function(X, design, coef, alternative) {
-    res = lapply(seq_len(ncol(X)), function(i){
-        x_var = colnames(X)[i]
-        x = X[, x_var]
-        mod = lm(x ~ design + 0)
-        ci = confint(mod)[paste0("design", coef),]
-        names(ci) = paste("CI", names(ci))
-        df.residual = mod$df.residual
-        coefficients = summary(mod)$coefficients[paste0("design", coef),]
-        if(alternative[i] != "two.sided"){
-            lower_tail = alternative[i] == "less"
-            coefficients[4] = pt(coefficients[3], df.residual, lower.tail = lower_tail)
-        }
-        return(list(
-            "coefficients" = coefficients,
-            "confint"      = ci,
-            "df.residual"  = df.residual
-        ))
-    })
-    coefficients = lapply(res, function(x) x$coefficients) %>%
-        do.call(rbind, .) %>% `rownames<-`(colnames(X))
-    df.residual = sapply(res, function(x) x$df.residual) %>%
-        `names<-`(colnames(X))
-    confint = lapply(res, function(x) x$confint) %>%
-        do.call(rbind, .) %>% `rownames<-`(colnames(X))
-    return(list(
-        "coefficients" = coefficients,
-        "confint"      = confint,
-        "df.residual"  = df.residual
-    ))
-}
-
-
-#' @title make dummy variables
-#' @description convert any categorical variables into dummy variables in a data
-#' frame
-#' @param x data.frame
-#' @return data.frame
+#' @title export summary mlms to excel
+#' @description export summary mlms to excel files
+#' @param x summary.mlms returned by \code{\link{summary.mlms}}
+#' @param file character. The file path to export
 #' @export
 #' @examples
-#' df = make_dummy_variables(iris)
-make_dummy_variables = function(x){
-    out = NULL
-    for(var in colnames(x)){
-        col = x[[var]]
-        if(!is.numeric(col)){
-            col = as.factor(col)
-            if(length(levels(col)) == 2){
-                col = as.numeric(col) - 1
-                out = cbind(out, col)
-                colnames(out)[ncol(out)] = var
-            } else {
-                dummys = sapply(levels(col)[-1], function(l){
-                    ifelse(col == l, 1, 0)
-                })
-                colnames(dummys) = paste0(var, ":", levels(col)[-1])
-                out = as.data.frame(cbind(out, dummys))
-            }
-        } else {
-            out = cbind(out, col)
-            colnames(out)[ncol(out)] = var
-        }
+#' data(growth)
+#' X = growth[,1:3]
+#' design = model.matrix(~treatment, data = growth)
+#' Z = growth[,5:10]
+#' fit = fit_mlms(X, design, Z, coef = "treatmentLNS")
+#' res = summary(fit)
+#' export(res, "growth.xlsx")
+export.summary.mlms = function(x, file){
+    if(!requireNamespace("openxlsx")){
+        stop("Please install openxlsx using:\ninstall.packages(\"openxlsx\")")
     }
-    return(as.data.frame(out))
+    wb = openxlsx::createWorkbook()
+    openxlsx::addWorksheet(wb, "MainEffects")
+    openxlsx::writeData(wb, "MainEffects", x$models)
+
+    openxlsx::addWorksheet(wb, "ModelSelection")
+    bivar = as.data.frame(x$bivars)
+    bivar$pvalgroup = ""
+    bivar$pvalgroup[1] = "Bivariate"
+    bivar$var = rownames(bivar)
+    n = ncol(bivar)
+    bivar = bivar[,c(n-1, n, seq_len(n-2))]
+    covar = as.data.frame(x$covars)
+    covar$pvalgroup = ""
+    covar$pvalgroup[1] = "Covariate"
+    covar$var = rownames(covar)
+    n = ncol(covar)
+    covar = covar[,c(n-1, n, seq_len(n-2))]
+    model_select = rbind(bivar, covar)
+    openxlsx::writeData(wb, "ModelSelection", model_select)
+
+    openxlsx::saveWorkbook(wb, file = file, overwrite = TRUE)
 }
