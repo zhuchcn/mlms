@@ -33,6 +33,7 @@ An object of class "mlms" is a list containing the following components:
   \item{confint}{95\% confidence internal}
   \item{unadjusted}{The coefficients of unadjusted model}
   \item{adjusted}{The coefficients of adjusted model}
+  \item{alternative}{The alternative hypothesis}
 }
 }
 \description{
